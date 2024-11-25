@@ -1,0 +1,168 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: cloud-app
+  namespace: dev
+  labels:
+    app: cloud-app
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: cloud-app
+  template:
+    metadata:
+      labels:
+        app: cloud-app
+    spec:
+      containers:
+        - name: cloud-app
+          image: busybox
+          command:
+            [
+              "sh",
+              "-c",
+              "while true; do echo 'Hello, World!'; sleep 3600; done",
+            ]
+          env:
+            - name: api-token
+              valueFrom:
+                secretKeyRef:
+                  name: cloud-secret
+                  key: token
+          volumeMounts:
+            - name: config-volume
+              mountPath: /var/www/html
+            - name: efs-pvc
+              mountPath: /var/www/efs
+          volumes:
+            - name: config-volume
+              configMap:
+                name: cloud-configmap
+            - name: efs-pvc
+              persistentVolumeClaim:
+                claimName: efs-pvc
+          ports:
+            - containerPort: 80
+          resources:
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: cloud-service
+  namespace: dev
+  labels:
+    app: cloud-app
+spec:
+  selector:
+    app: cloud-app
+  ports:
+    - protocol: TCP
+      port: 80
+      targetPort: 80
+  type: ClusterIP
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: cloud-secret
+  namespace: dev
+type: Opaque
+data:
+  token: SGVsbG9TZWNyZXQ=
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: ingress-ssl-secret
+  namespace: dev
+type: kubernetes.io/tls
+data:
+  tls.crt: SGVsbG9TZWNyZXQ=
+  tls.key: SGVsbG9TZWNyZXQ=
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: cloud-configmap
+  namespace: dev
+data:
+  hello: world
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: cloud-ingress
+  namespace: dev
+  annotations:
+    nginx.ingress.kubernetes.io/ssl-redirect: "true"
+spec:
+  tls:
+    - hosts:
+        - mycloud.maybank.com
+      secretName: ingress-ssl-secret
+  rules:
+    - host: mycloud.maybank.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: cloud-service
+                port:
+                  number: 80
+---
+kind: StorageClass
+apiVersion: storage.k8s.io/v1
+metadata:
+  name: efs-sc
+provisioner: efs.csi.aws.com
+parameters:
+  provisioningMode: efs-ap
+  fileSystemId: fs-92107410
+  directoryPerms: "700"
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: efs-pvc
+  namespace: dev
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: efs-sc
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: autoscaling/v1
+kind: HorizontalPodAutoscaler
+metadata:
+  name: cloud-hpa
+  namespace: dev
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: cloud-app
+  minReplicas: 1
+  maxReplicas: 3
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 50
