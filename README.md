@@ -12,7 +12,7 @@
     ```sh
     cd question_1
     ```
-2. Install the required dependencies:
+2. Initialize the tf project:
     ```sh
     terraform init
     ```
